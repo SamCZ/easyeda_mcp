@@ -1106,6 +1106,20 @@ function extractSegments(value: unknown): Segment[] {
   }
   const segments: Segment[] = [];
   const points: Required<Position>[] = [];
+  // EasyEDA Pro returns wire geometry as a flat numeric array of consecutive
+  // x,y pairs: [x1, y1, x2, y2, x3, y3, ...] forms one polyline.
+  if (value.length >= 4 && value.every((item) => typeof item === "number")) {
+    for (let index = 0; index + 1 < value.length; index += 2) {
+      const point = requiredPosition({ x: numberValue(value[index]), y: numberValue(value[index + 1]) });
+      if (point) {
+        points.push(point);
+      }
+    }
+    for (let index = 1; index < points.length; index += 1) {
+      segments.push({ start: points[index - 1], end: points[index] });
+    }
+    return segments;
+  }
   for (const item of value) {
     if (Array.isArray(item) && item.length >= 4) {
       const start = requiredPosition({ x: numberValue(item[0]), y: numberValue(item[1]) });

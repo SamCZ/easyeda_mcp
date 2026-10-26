@@ -150,6 +150,31 @@ describe("schematic analysis", () => {
     expect(snapshot.pins[0]?.connectivityEvidence?.confidence).toBe("high");
   });
 
+  it("parses flat EasyEDA Pro wire geometry and connects a pin at its endpoint", () => {
+    const snapshot = buildSchematicSnapshot({
+      components: [component("U3", "$u3", "IC")],
+      pinsByComponent: {
+        $u3: [
+          pinAt("1", "SCL", undefined, 700, 635),
+          pinAt("2", "SDA", undefined, 760, 700),
+          pinAt("3", "NC", undefined, 900, 900)
+        ]
+      },
+      wires: [
+        wirePath("I2C_SCL", [740, 635, 700, 635]),
+        wirePath("I2C_SDA", [740, 660, 760, 660, 760, 700])
+      ],
+      includeRaw: false
+    });
+
+    expect(snapshot.pins.map((item) => item.net)).toEqual(["I2C_SCL", "I2C_SDA", undefined]);
+    expect(snapshot.pins[0]?.connected).toBe(true);
+    expect(snapshot.pins[0]?.netSource).toBe("wire_inferred");
+    expect(snapshot.pins[1]?.connected).toBe(true);
+    expect(snapshot.pins[2]?.connected).toBe(false);
+    expect(findUnconnectedPins(snapshot).pins.map((item) => item.pinNumber)).toEqual(["3"]);
+  });
+
   it("infers a pin net when the pin touches a horizontal or vertical wire segment", () => {
     const snapshot = buildSchematicSnapshot({
       components: [component("U1", "$u1", "IC")],
