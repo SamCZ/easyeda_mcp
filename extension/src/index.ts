@@ -45,7 +45,7 @@ type BridgeErrorMessage = {
 };
 
 const WS_ID = "easyeda-mcp-bridge";
-const EXTENSION_VERSION = "0.1.0";
+const EXTENSION_VERSION = "0.1.6";
 const bridgeConfig = getBridgeConfig();
 
 type ConnectionPhase = "idle" | "connecting" | "connected" | "blocked";
@@ -92,6 +92,10 @@ const handlers: Record<string, (params: Record<string, any>) => Promise<unknown>
   verifyConnections: verifyConnectionsTool,
   verifyConnectionsTool,
   navigateComponent,
+  schEdit,
+  libLookup,
+  pcbRules,
+  pcbEdit,
   navigateRegion,
   zoomBoard,
   exportBom,
@@ -877,6 +881,611 @@ function normalizeBBox(value: unknown): { left: number; right: number; top: numb
   return undefined;
 }
 
+// ---------------------------------------------------------------------------
+// Schematic editing (beta EasyEDA Pro APIs): wires, library devices, net flags.
+// Coordinates are schematic units (10 mil); see eda.sch_PrimitiveWire.create docs.
+// ---------------------------------------------------------------------------
+
+function callState(target: any, getter: string): unknown {
+  if (!target) {
+    return undefined;
+  }
+  const fn = target[getter];
+  if (typeof fn === "function") {
+    try {
+      return fn.call(target);
+    } catch {
+      return undefined;
+    }
+  }
+  const key = getter.replace(/^getState_/, "");
+  return target[key] ?? target[key.charAt(0).toLowerCase() + key.slice(1)];
+}
+
+async function libLookup(params: Record<string, any>): Promise<Record<string, unknown>> {
+  const lcsc = typeof params.lcsc === "string" ? params.lcsc.trim() : "";
+  const query = typeof params.query === "string" ? params.query.trim() : "";
+  if (lcsc) {
+    ensureApi("lib_Device", "getByLcscIds");
+    const found = await eda.lib_Device.getByLcscIds(lcsc, params.libraryUuid, true);
+    return { lcsc, matches: sanitize(toArray(found)), betaApi: true };
+  }
+  ensureApi("lib_Device", "search");
+  const found = await eda.lib_Device.search(query, params.libraryUuid, undefined, undefined, params.limit ?? 20, 1);
+  return { query, matches: sanitize(toArray(found)), betaApi: true };
+}
+
+// ---------------------------------------------------------------------------
+// PCB design rules (beta EasyEDA Pro APIs): rule configurations, net classes,
+// differential pairs, equal-length groups, DRC, layers and physical stackup.
+// The PCB document must be the active tab.
+// ---------------------------------------------------------------------------
+
+async function pcbRules(params: Record<string, any>): Promise<Record<string, unknown>> {
+  const operations: Array<Record<string, any>> = Array.isArray(params.operations) ? params.operations : [];
+  const results: Array<Record<string, unknown>> = [];
+  for (let index = 0; index < operations.length; index += 1) {
+    const op = operations[index] ?? {};
+    const kind = String(op.kind ?? "");
+    try {
+      const result = await pcbRuleOperation(kind, op);
+      results.push({ index, kind, ok: true, result: deepPlain(result) });
+    } catch (error) {
+      results.push({ index, kind, ok: false, error: normalizeError(error) });
+      if (params.stopOnError !== false) {
+        break;
+      }
+    }
+  }
+  return {
+    requested: operations.length,
+    completed: results.filter((r) => r.ok).length,
+    results,
+    betaApi: true
+  };
+}
+
+function pcbDrc(method: string): any {
+  ensureApi("pcb_Drc", method);
+  return (eda as any).pcb_Drc;
+}
+
+function pcbLayer(method: string): any {
+  ensureApi("pcb_Layer", method);
+  return (eda as any).pcb_Layer;
+}
+
+async function pcbRuleOperation(kind: string, op: Record<string, any>): Promise<unknown> {
+  const name = op.name !== undefined ? String(op.name) : "";
+  const nets: Array<string> = Array.isArray(op.nets) ? op.nets.map(String) : [];
+  const color = op.color ?? null;
+  switch (kind) {
+    case "get_config": {
+      const current = await pcbDrc("getCurrentRuleConfiguration").getCurrentRuleConfiguration();
+      return current ?? null;
+    }
+    case "get_config_name":
+      return await pcbDrc("getCurrentRuleConfigurationName").getCurrentRuleConfigurationName();
+    case "get_config_by_name":
+      return await pcbDrc("getRuleConfiguration").getRuleConfiguration(name);
+    case "list_configs":
+      return await pcbDrc("getAllRuleConfigurations").getAllRuleConfigurations(op.includeSystem !== false);
+    case "overwrite_config":
+      if (!op.config || typeof op.config !== "object") {
+        throw apiError("invalid_params", "overwrite_config needs config (the object from get_config .config).");
+      }
+      return await pcbDrc("overwriteCurrentRuleConfiguration").overwriteCurrentRuleConfiguration(op.config);
+    case "save_config":
+      if (!op.config || typeof op.config !== "object" || !name) {
+        throw apiError("invalid_params", "save_config needs config and name.");
+      }
+      return await pcbDrc("saveRuleConfiguration").saveRuleConfiguration(op.config, name, op.allowOverwrite !== false);
+    case "delete_config":
+      return await pcbDrc("deleteRuleConfiguration").deleteRuleConfiguration(name);
+    case "set_default_config":
+      return await pcbDrc("setAsDefaultRuleConfiguration").setAsDefaultRuleConfiguration(name);
+    case "get_default_config_name":
+      return await pcbDrc("getDefaultRuleConfigurationName").getDefaultRuleConfigurationName();
+    case "get_net_rules":
+      return await pcbDrc("getNetRules").getNetRules();
+    case "overwrite_net_rules":
+      if (!Array.isArray(op.netRules)) {
+        throw apiError("invalid_params", "overwrite_net_rules needs netRules (array from get_net_rules).");
+      }
+      return await pcbDrc("overwriteNetRules").overwriteNetRules(op.netRules);
+    case "get_net_by_net_rules":
+      return await pcbDrc("getNetByNetRules").getNetByNetRules();
+    case "overwrite_net_by_net_rules":
+      return await pcbDrc("overwriteNetByNetRules").overwriteNetByNetRules(op.rules ?? {});
+    case "get_region_rules":
+      return await pcbDrc("getRegionRules").getRegionRules();
+    case "overwrite_region_rules":
+      if (!Array.isArray(op.regionRules)) {
+        throw apiError("invalid_params", "overwrite_region_rules needs regionRules (array from get_region_rules).");
+      }
+      return await pcbDrc("overwriteRegionRules").overwriteRegionRules(op.regionRules);
+    case "get_net_classes":
+      return await pcbDrc("getAllNetClasses").getAllNetClasses();
+    case "create_net_class":
+      return await pcbDrc("createNetClass").createNetClass(name, nets, color);
+    case "delete_net_class":
+      return await pcbDrc("deleteNetClass").deleteNetClass(name);
+    case "rename_net_class":
+      return await pcbDrc("modifyNetClassName").modifyNetClassName(name, String(op.newName ?? ""));
+    case "add_nets_to_class":
+      return await pcbDrc("addNetToNetClass").addNetToNetClass(name, nets);
+    case "remove_nets_from_class":
+      return await pcbDrc("removeNetFromNetClass").removeNetFromNetClass(name, nets);
+    case "get_diff_pairs":
+      return await pcbDrc("getAllDifferentialPairs").getAllDifferentialPairs();
+    case "create_diff_pair":
+      return await pcbDrc("createDifferentialPair").createDifferentialPair(name, String(op.positiveNet ?? ""), String(op.negativeNet ?? ""));
+    case "delete_diff_pair":
+      return await pcbDrc("deleteDifferentialPair").deleteDifferentialPair(name);
+    case "get_equal_length_groups":
+      return await pcbDrc("getAllEqualLengthNetGroups").getAllEqualLengthNetGroups();
+    case "create_equal_length_group":
+      return await pcbDrc("createEqualLengthNetGroup").createEqualLengthNetGroup(name, nets, color);
+    case "delete_equal_length_group":
+      return await pcbDrc("deleteEqualLengthNetGroup").deleteEqualLengthNetGroup(name);
+    case "add_nets_to_equal_length_group":
+      return await pcbDrc("addNetToEqualLengthNetGroup").addNetToEqualLengthNetGroup(name, nets);
+    case "check_drc":
+      return await pcbDrc("check").check(op.strict !== false, Boolean(op.userInterface), op.verbose !== false);
+    case "realtime_drc": {
+      const action = String(op.action ?? "status");
+      if (action === "start") {
+        return await pcbDrc("startRealTimeDrc").startRealTimeDrc();
+      }
+      if (action === "stop") {
+        return await pcbDrc("stopRealTimeDrc").stopRealTimeDrc();
+      }
+      return await pcbDrc("getRealTimeDrcStatus").getRealTimeDrcStatus();
+    }
+    case "get_nets":
+      ensureApi("pcb_Net", "getAllNetsName");
+      return await (eda as any).pcb_Net.getAllNetsName();
+    case "get_net_info":
+      ensureApi("pcb_Net", "getAllNets");
+      return await (eda as any).pcb_Net.getAllNets();
+    case "get_layers":
+      return await pcbLayer("getAllLayers").getAllLayers();
+    case "get_copper_layer_count":
+      return await pcbLayer("getTheNumberOfCopperLayers").getTheNumberOfCopperLayers();
+    case "set_copper_layer_count":
+      return await pcbLayer("setTheNumberOfCopperLayers").setTheNumberOfCopperLayers(Number(op.count));
+    case "modify_layer":
+      return await pcbLayer("modifyLayer").modifyLayer(op.layer, op.property ?? {});
+    case "get_stackup":
+      return await pcbLayer("getCurrentPhysicalStackingConfiguration").getCurrentPhysicalStackingConfiguration();
+    case "get_stackup_name":
+      return await pcbLayer("getCurrentPhysicalStackingConfigurationName").getCurrentPhysicalStackingConfigurationName();
+    case "list_stackups":
+      return await pcbLayer("getAllPhysicalStackingConfigurations").getAllPhysicalStackingConfigurations(op.physicalProps);
+    case "get_stackup_by_name":
+      return await pcbLayer("getPhysicalStackingConfiguration").getPhysicalStackingConfiguration(name, op.physicalProps);
+    case "overwrite_stackup":
+      if (!op.config || typeof op.config !== "object") {
+        throw apiError("invalid_params", "overwrite_stackup needs config (from get_stackup or list_stackups).");
+      }
+      return await pcbLayer("overwriteCurrentPhysicalStackingConfiguration").overwriteCurrentPhysicalStackingConfiguration(op.config);
+    case "edit":
+      // Pass-through to the PCB edit operations so older MCP servers can reach them.
+      return await pcbEditOperation(String(op.op ?? ""), op);
+    default:
+      throw apiError("unknown_operation", `Unsupported PCB rule operation: ${kind}`);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// PCB editing (beta EasyEDA Pro APIs): generic API calls, pads of a footprint,
+// pad shape changes, constraint / keepout regions, primitives in a rectangle.
+// PCB coordinates and sizes are mil unless an operation sets mm: true.
+// ---------------------------------------------------------------------------
+
+const MIL_PER_MM = 1000 / 25.4;
+const PAD_GETTERS = ["PrimitiveId", "ParentPrimitiveId", "PadNumber", "Net", "Layer", "X", "Y", "Rotation", "Pad", "Hole",
+  "HoleOffsetX", "HoleOffsetY", "Metallization", "SpecialPad", "SolderMaskAndPasteMaskExpansion", "PrimitiveLock"];
+const COMPONENT_GETTERS = ["PrimitiveId", "Designator", "Layer", "X", "Y", "Rotation", "PrimitiveLock"];
+const GENERIC_GETTERS = ["PrimitiveId", "PrimitiveType", "Net", "Layer", "X", "Y", "Width", "Height", "LineWidth", "Rotation",
+  "RegionName", "RuleType", "PadNumber", "ParentPrimitiveId", "StartX", "StartY", "EndX", "EndY", "PrimitiveLock"];
+
+async function pcbEdit(params: Record<string, any>): Promise<Record<string, unknown>> {
+  const operations: Array<Record<string, any>> = Array.isArray(params.operations) ? params.operations : [];
+  const results: Array<Record<string, unknown>> = [];
+  for (let index = 0; index < operations.length; index += 1) {
+    const op = operations[index] ?? {};
+    const kind = String(op.kind ?? "");
+    try {
+      const result = await pcbEditOperation(kind, op);
+      results.push({ index, kind, ok: true, result: deepPlain(result) });
+    } catch (error) {
+      results.push({ index, kind, ok: false, error: normalizeError(error) });
+      if (params.stopOnError !== false) {
+        break;
+      }
+    }
+  }
+  return {
+    requested: operations.length,
+    completed: results.filter((r) => r.ok).length,
+    results,
+    betaApi: true
+  };
+}
+
+function pcbStateObject(target: any, getters: string[]): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const getter of getters) {
+    const value = callState(target, "getState_" + getter);
+    if (value !== undefined) {
+      out[getter.charAt(0).toLowerCase() + getter.slice(1)] = sanitize(value);
+    }
+  }
+  return out;
+}
+
+async function resolveArg(value: any): Promise<any> {
+  if (Array.isArray(value)) {
+    const out: any[] = [];
+    for (const item of value) {
+      out.push(await resolveArg(item));
+    }
+    return out;
+  }
+  if (value && typeof value === "object") {
+    if (value.$call && typeof value.$call === "object") {
+      const call = value.$call;
+      return await callEdaApi(String(call.api ?? ""), String(call.method ?? ""), Array.isArray(call.args) ? call.args : []);
+    }
+    const out: Record<string, any> = {};
+    for (const [key, item] of Object.entries(value)) {
+      out[key] = await resolveArg(item);
+    }
+    return out;
+  }
+  return value;
+}
+
+async function callEdaApi(api: string, method: string, args: any[]): Promise<any> {
+  if (!/^[A-Za-z0-9_]+$/.test(api) || !/^[A-Za-z0-9_]+$/.test(method)) {
+    throw apiError("invalid_params", "api and method must be plain identifiers, for example pcb_PrimitivePad and getAll.");
+  }
+  ensureApi(api, method);
+  const resolved = await resolveArg(args);
+  return await (eda as any)[api][method](...resolved);
+}
+
+async function findPcbComponent(designator: string): Promise<any> {
+  if (!designator) {
+    throw apiError("invalid_params", "designator is required.");
+  }
+  const comps = await getPcbComponents();
+  const found = comps.find((c: any) => String(callState(c, "getState_Designator") ?? "") === designator);
+  if (!found) {
+    throw apiError("not_found", `No PCB component with designator ${designator}.`);
+  }
+  return found;
+}
+
+function toMil(value: unknown, mm: boolean): number {
+  const n = Number(value);
+  return mm ? n * MIL_PER_MM : n;
+}
+
+async function pcbEditOperation(kind: string, op: Record<string, any>): Promise<unknown> {
+  const mm = op.mm === true;
+  switch (kind) {
+    case "call":
+      return await callEdaApi(String(op.api ?? ""), String(op.method ?? ""), Array.isArray(op.args) ? op.args : []);
+    case "list_apis": {
+      const prefix = typeof op.prefix === "string" ? op.prefix : "";
+      const out: Record<string, string[]> = {};
+      for (const key of Object.keys(eda as any)) {
+        if (prefix && !key.startsWith(prefix)) continue;
+        const obj = (eda as any)[key];
+        if (!obj || (typeof obj !== "object" && typeof obj !== "function")) continue;
+        const names = new Set<string>();
+        let proto: any = obj;
+        while (proto && proto !== Object.prototype && proto !== Function.prototype) {
+          for (const n of Object.getOwnPropertyNames(proto)) {
+            if (n !== "constructor" && typeof obj[n] === "function") names.add(n);
+          }
+          proto = Object.getPrototypeOf(proto);
+        }
+        out[key] = Array.from(names).sort();
+      }
+      return out;
+    }
+    case "list_components": {
+      const comps = await getPcbComponents();
+      return comps.map((c) => pcbStateObject(c, COMPONENT_GETTERS));
+    }
+    case "component_pads": {
+      const comp = await findPcbComponent(String(op.designator ?? ""));
+      const id = String(callState(comp, "getState_PrimitiveId") ?? "");
+      ensureApi("pcb_PrimitiveComponent", "getAllPinsByPrimitiveId");
+      const pads = toArray(await eda.pcb_PrimitiveComponent.getAllPinsByPrimitiveId(id));
+      return { component: pcbStateObject(comp, COMPONENT_GETTERS), pads: pads.map((p) => pcbStateObject(p, PAD_GETTERS)) };
+    }
+    case "modify_pads": {
+      ensureApi("pcb_PrimitivePad", "modify");
+      const ids: string[] = Array.isArray(op.primitiveIds) ? op.primitiveIds.map(String) : [];
+      if (!ids.length || !op.property || typeof op.property !== "object") {
+        throw apiError("invalid_params", "modify_pads needs primitiveIds and property (fields of pcb_PrimitivePad.modify).");
+      }
+      const property = await resolveArg(op.property);
+      if (mm && Array.isArray(property.pad)) {
+        property.pad = property.pad.map((v: any, i: number) => (i > 0 && typeof v === "number" ? v * MIL_PER_MM : v));
+      }
+      const out: Array<Record<string, unknown>> = [];
+      for (const id of ids) {
+        const res = await eda.pcb_PrimitivePad.modify(id, property);
+        out.push({ primitiveId: id, ok: Boolean(res), pad: res ? pcbStateObject(res, PAD_GETTERS) : undefined });
+      }
+      return out;
+    }
+    case "create_region": {
+      ensureApi("pcb_PrimitiveRegion", "create");
+      ensureApi("pcb_MathPolygon", "createPolygon");
+      let source: any = op.polygon;
+      if (Array.isArray(op.rect) && op.rect.length === 4) {
+        const [x0, y0, x1, y1] = op.rect.map((v: any) => toMil(v, mm));
+        source = ["R", Math.min(x0, x1), Math.max(y0, y1), Math.abs(x1 - x0), Math.abs(y1 - y0), 0, 0];
+      }
+      if (!source) {
+        throw apiError("invalid_params", "create_region needs rect [x0, y0, x1, y1] or polygon (pcb_MathPolygon.createPolygon source array).");
+      }
+      const polygon = await eda.pcb_MathPolygon.createPolygon(source);
+      const ruleType = Array.isArray(op.ruleType) ? op.ruleType.map(Number) : [9];
+      const lineWidth = op.lineWidth !== undefined ? toMil(op.lineWidth, mm) : undefined;
+      const region = await eda.pcb_PrimitiveRegion.create(op.layer ?? 12, polygon, ruleType, op.name ? String(op.name) : undefined, lineWidth, false);
+      return region ? pcbStateObject(region, GENERIC_GETTERS) : null;
+    }
+    case "list_regions": {
+      ensureApi("pcb_PrimitiveRegion", "getAll");
+      const regions = toArray(await eda.pcb_PrimitiveRegion.getAll());
+      return regions.map((r) => pcbStateObject(r, GENERIC_GETTERS));
+    }
+    case "primitives_in_rect": {
+      ensureApi("pcb_Document", "getPrimitivesInRegion");
+      if (!Array.isArray(op.rect) || op.rect.length !== 4) {
+        throw apiError("invalid_params", "primitives_in_rect needs rect [x0, y0, x1, y1].");
+      }
+      const [x0, y0, x1, y1] = op.rect.map((v: any) => toMil(v, mm));
+      const prims = toArray(await eda.pcb_Document.getPrimitivesInRegion(Math.min(x0, x1), Math.max(x0, x1), Math.max(y0, y1), Math.min(y0, y1), op.enclosedOnly === true));
+      return prims.map((p) => pcbStateObject(p, GENERIC_GETTERS));
+    }
+    case "delete": {
+      const ids: string[] = Array.isArray(op.primitiveIds) ? op.primitiveIds.map(String) : [];
+      const api = String(op.api ?? "pcb_Primitive");
+      if (!ids.length) {
+        throw apiError("invalid_params", "delete needs primitiveIds.");
+      }
+      ensureApi(api, "delete");
+      return await (eda as any)[api].delete(ids);
+    }
+    default:
+      throw apiError("unknown_operation", `Unsupported PCB edit operation: ${kind}`);
+  }
+}
+
+async function schEdit(params: Record<string, any>): Promise<Record<string, unknown>> {
+  const operations: Array<Record<string, any>> = Array.isArray(params.operations) ? params.operations : [];
+  const results: Array<Record<string, unknown>> = [];
+  for (let index = 0; index < operations.length; index += 1) {
+    const op = operations[index] ?? {};
+    const kind = String(op.kind ?? "");
+    try {
+      let result: Record<string, unknown>;
+      if (kind === "create_wire") {
+        result = await schCreateWire(op);
+      } else if (kind === "create_component") {
+        result = await schCreateComponent(op);
+      } else if (kind === "create_net_flag") {
+        result = await schCreateNetFlag(op);
+      } else if (kind === "create_net_port") {
+        result = await schCreateNetPort(op);
+      } else if (kind === "list_attributes") {
+        result = await schListAttributes(op);
+      } else if (kind === "modify_attribute") {
+        result = await schModifyAttribute(op);
+      } else if (kind === "create_net_label") {
+        result = await schCreateNetLabel(op);
+      } else if (kind === "modify_component") {
+        result = await schModifyComponent(op);
+      } else if (kind === "delete") {
+        result = await schDelete(op);
+      } else {
+        throw apiError("unknown_operation", `Unsupported schematic edit operation: ${kind}`);
+      }
+      results.push({ index, kind, ok: true, ...result });
+    } catch (error) {
+      results.push({ index, kind, ok: false, error: normalizeError(error) });
+      if (params.stopOnError !== false) {
+        break;
+      }
+    }
+  }
+  return {
+    requested: operations.length,
+    completed: results.filter((r) => r.ok).length,
+    results,
+    betaApi: true
+  };
+}
+
+async function schCreateWire(op: Record<string, any>): Promise<Record<string, unknown>> {
+  ensureApi("sch_PrimitiveWire", "create");
+  if (!Array.isArray(op.line) || op.line.length === 0) {
+    throw apiError("invalid_params", "create_wire needs line: [x1, y1, x2, y2, ...] or [[x1, y1, x2, y2], ...].");
+  }
+  const wire = await eda.sch_PrimitiveWire.create(op.line, op.net ?? undefined, op.color ?? null, op.lineWidth ?? null, null);
+  if (!wire) {
+    throw apiError("create_failed", "EasyEDA Pro did not create the wire (invalid path, or the points touch different nets).");
+  }
+  return {
+    primitiveId: callState(wire, "getState_PrimitiveId"),
+    net: callState(wire, "getState_Net"),
+    line: sanitize(callState(wire, "getState_Line"))
+  };
+}
+
+async function schCreateComponent(op: Record<string, any>): Promise<Record<string, unknown>> {
+  ensureApi("sch_PrimitiveComponent", "create");
+  let device = op.device;
+  if (!device && op.lcsc) {
+    ensureApi("lib_Device", "getByLcscIds");
+    const found = toArray(await eda.lib_Device.getByLcscIds(String(op.lcsc), op.libraryUuid, true));
+    device = found[0];
+    if (!device) {
+      throw apiError("device_not_found", `No library device matched LCSC ${op.lcsc}.`);
+    }
+  }
+  if (!device) {
+    throw apiError("invalid_params", "create_component needs lcsc (C number) or device {libraryUuid, uuid}.");
+  }
+  const comp = await eda.sch_PrimitiveComponent.create(
+    device,
+    Number(op.x),
+    Number(op.y),
+    op.subPartName ?? undefined,
+    Number(op.rotation ?? 0),
+    Boolean(op.mirror),
+    op.addIntoBom ?? true,
+    op.addIntoPcb ?? true
+  );
+  if (!comp) {
+    throw apiError("create_failed", "EasyEDA Pro did not create the component.");
+  }
+  const primitiveId = String(callState(comp, "getState_PrimitiveId") ?? "");
+  const property: Record<string, unknown> = {};
+  for (const key of ["designator", "name", "supplier", "supplierId", "manufacturer", "manufacturerId", "uniqueId"]) {
+    if (op[key] !== undefined && op[key] !== null) {
+      property[key] = String(op[key]);
+    }
+  }
+  if (op.otherProperty && typeof op.otherProperty === "object") {
+    property.otherProperty = op.otherProperty;
+  }
+  if (primitiveId && Object.keys(property).length > 0) {
+    ensureApi("sch_PrimitiveComponent", "modify");
+    await eda.sch_PrimitiveComponent.modify(primitiveId, property);
+  }
+  const refreshed = primitiveId ? await optionalCall(() => eda.sch_PrimitiveComponent.get(primitiveId)) : undefined;
+  const pins = primitiveId ? await optionalCall(() => eda.sch_PrimitiveComponent.getAllPinsByPrimitiveId(primitiveId)) : undefined;
+  return {
+    primitiveId,
+    designator: callState(refreshed ?? comp, "getState_Designator"),
+    x: callState(refreshed ?? comp, "getState_X"),
+    y: callState(refreshed ?? comp, "getState_Y"),
+    rotation: callState(refreshed ?? comp, "getState_Rotation"),
+    pins: sanitize(toArray(pins))
+  };
+}
+
+async function schCreateNetFlag(op: Record<string, any>): Promise<Record<string, unknown>> {
+  ensureApi("sch_PrimitiveComponent", "createNetFlag");
+  const identification = String(op.identification ?? "Ground");
+  const flag = await eda.sch_PrimitiveComponent.createNetFlag(
+    identification,
+    String(op.net ?? ""),
+    Number(op.x),
+    Number(op.y),
+    Number(op.rotation ?? 0),
+    Boolean(op.mirror)
+  );
+  if (!flag) {
+    throw apiError("create_failed", "EasyEDA Pro did not create the net flag.");
+  }
+  return {
+    primitiveId: callState(flag, "getState_PrimitiveId"),
+    net: callState(flag, "getState_Net"),
+    identification
+  };
+}
+
+async function schCreateNetPort(op: Record<string, any>): Promise<Record<string, unknown>> {
+  ensureApi("sch_PrimitiveComponent", "createNetPort");
+  const direction = String(op.direction ?? "BI");
+  const port = await eda.sch_PrimitiveComponent.createNetPort(
+    direction,
+    String(op.net ?? ""),
+    Number(op.x),
+    Number(op.y),
+    Number(op.rotation ?? 0),
+    Boolean(op.mirror)
+  );
+  if (!port) {
+    throw apiError("create_failed", "EasyEDA Pro did not create the net port.");
+  }
+  return {
+    primitiveId: callState(port, "getState_PrimitiveId"),
+    net: callState(port, "getState_Net"),
+    direction
+  };
+}
+
+async function schListAttributes(op: Record<string, any>): Promise<Record<string, unknown>> {
+  ensureApi("sch_PrimitiveAttribute", "getAll");
+  const items = toArray(await eda.sch_PrimitiveAttribute.getAll(op.parentPrimitiveId ?? undefined));
+  const keyFilter = typeof op.key === "string" ? op.key : undefined;
+  const attributes = items
+    .map((a: any) => ({
+      primitiveId: callState(a, "getState_PrimitiveId"),
+      parentPrimitiveId: callState(a, "getState_ParentPrimitiveId"),
+      key: callState(a, "getState_Key"),
+      value: callState(a, "getState_Value"),
+      x: callState(a, "getState_X"),
+      y: callState(a, "getState_Y"),
+      rotation: callState(a, "getState_Rotation"),
+      keyVisible: callState(a, "getState_KeyVisible"),
+      valueVisible: callState(a, "getState_ValueVisible")
+    }))
+    .filter((a: any) => !keyFilter || String(a.key) === keyFilter);
+  return { count: attributes.length, attributes: attributes.slice(0, 2000) };
+}
+
+async function schModifyAttribute(op: Record<string, any>): Promise<Record<string, unknown>> {
+  ensureApi("sch_PrimitiveAttribute", "modify");
+  const result = await eda.sch_PrimitiveAttribute.modify(String(op.primitiveId ?? ""), op.property ?? {});
+  return { primitiveId: op.primitiveId, modified: Boolean(result) };
+}
+
+async function schCreateNetLabel(op: Record<string, any>): Promise<Record<string, unknown>> {
+  ensureApi("sch_PrimitiveAttribute", "createNetLabel");
+  const label = await eda.sch_PrimitiveAttribute.createNetLabel(Number(op.x), Number(op.y), String(op.net ?? ""));
+  if (!label) {
+    throw apiError("create_failed", "EasyEDA Pro did not create the net label (the point must lie on a wire).");
+  }
+  return {
+    primitiveId: callState(label, "getState_PrimitiveId"),
+    parentPrimitiveId: callState(label, "getState_ParentPrimitiveId"),
+    value: callState(label, "getState_Value"),
+    x: callState(label, "getState_X"),
+    y: callState(label, "getState_Y")
+  };
+}
+
+async function schModifyComponent(op: Record<string, any>): Promise<Record<string, unknown>> {
+  ensureApi("sch_PrimitiveComponent", "modify");
+  const result = await eda.sch_PrimitiveComponent.modify(String(op.primitiveId ?? ""), op.property ?? {});
+  return { primitiveId: op.primitiveId, modified: Boolean(result) };
+}
+
+async function schDelete(op: Record<string, any>): Promise<Record<string, unknown>> {
+  const out: Record<string, unknown> = {};
+  if (Array.isArray(op.componentIds) && op.componentIds.length > 0) {
+    ensureApi("sch_PrimitiveComponent", "delete");
+    out.components = sanitize(await eda.sch_PrimitiveComponent.delete(op.componentIds));
+  }
+  if (Array.isArray(op.wireIds) && op.wireIds.length > 0) {
+    ensureApi("sch_PrimitiveWire", "delete");
+    out.wires = sanitize(await eda.sch_PrimitiveWire.delete(op.wireIds));
+  }
+  return out;
+}
+
 function ensureApi(objectName: string, methodName: string): void {
   if (!eda[objectName]?.[methodName]) {
     throw apiError("api_unavailable", `EasyEDA Pro API eda.${objectName}.${methodName} is unavailable in this context.`);
@@ -912,6 +1521,29 @@ async function optionalCall<T>(fn: () => T | Promise<T>): Promise<T | undefined>
     log("warn", "Optional EasyEDA API call failed", error);
     return undefined;
   }
+}
+
+function deepPlain(value: unknown, depth = 0, seen: WeakSet<object> = new WeakSet()): unknown {
+  if (depth > 40) {
+    return "[MaxDepth]";
+  }
+  if (value === null || value === undefined || typeof value !== "object") {
+    return typeof value === "function" ? undefined : value;
+  }
+  if (seen.has(value as object)) {
+    return "[Circular]";
+  }
+  seen.add(value as object);
+  if (Array.isArray(value)) {
+    return value.slice(0, 5000).map((item) => deepPlain(item, depth + 1, seen));
+  }
+  const output: Record<string, unknown> = {};
+  for (const [key, item] of Object.entries(value as Record<string, unknown>).slice(0, 2000)) {
+    if (typeof item !== "function") {
+      output[key] = deepPlain(item, depth + 1, seen);
+    }
+  }
+  return output;
 }
 
 function sanitize(value: unknown, depth = 0): unknown {

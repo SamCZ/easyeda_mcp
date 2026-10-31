@@ -412,6 +412,135 @@ export function registerEasyEdaTools(server: McpServer, bridge: EasyEdaBridge): 
     summary: "Requested EasyEDA Pro PDF export."
   });
 
+  registerReadTool(server, bridge, {
+    name: "easyeda_lib_lookup",
+    title: "Look up library devices",
+    description: "Finds library devices by LCSC C number (lcsc) or text search (query). The returned device items can be passed to easyeda_sch_edit create_component.",
+    method: "libLookup",
+    inputSchema: {
+      lcsc: z.string().min(1).optional().describe("LCSC C number, such as C15850."),
+      query: z.string().min(1).optional().describe("Free-text device search when no C number is given."),
+      libraryUuid: z.string().min(1).optional(),
+      limit: z.number().int().positive().max(100).default(20),
+      timeoutMs: DefaultTimeoutSchema.default(30_000)
+    },
+    summary: "Looked up library devices."
+  });
+
+  server.registerTool(
+    "easyeda_sch_edit",
+    {
+      title: "Edit the active schematic",
+      description:
+        "Applies schematic edit operations to the active EasyEDA Pro schematic (beta APIs). Operation kinds: " +
+        "create_wire {line: [x1,y1,x2,y2,...] or [[...],[...]], net?}; " +
+        "create_component {lcsc or device {libraryUuid, uuid}, x, y, rotation?, mirror?, designator?, name?, supplierId?, otherProperty?}; " +
+        "create_net_flag {identification: Power|Ground|AnalogGround|ProtectGround, net, x, y, rotation?}; " +
+        "modify_component {primitiveId, property}; delete {componentIds?, wireIds?}. " +
+        "Coordinates are schematic units (10 mil). Requires an explicit confirmation phrase.",
+      inputSchema: {
+        operations: z.array(z.record(z.string(), z.unknown())).min(1).max(200),
+        confirmation: z.string().describe("Must include an explicit confirmation phrase such as 'confirma salvar'."),
+        stopOnError: z.boolean().default(true),
+        timeoutMs: DefaultTimeoutSchema.default(60_000)
+      },
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: true,
+        idempotentHint: false,
+        openWorldHint: false
+      }
+    },
+    async ({ operations, confirmation, stopOnError, timeoutMs }) => {
+      try {
+        if (!hasExplicitMutationConfirmation(confirmation)) {
+          return fail(new Error('Schematic edit was blocked. The confirmation text must explicitly include a confirmation phrase such as "confirma salvar".'));
+        }
+        const result = await bridge.call("schEdit", { operations, stopOnError }, timeoutMs);
+        return ok("Applied schematic edit operations.", { result });
+      } catch (error) {
+        return fail(error);
+      }
+    }
+  );
+
+  server.registerTool(
+    "easyeda_pcb_rules",
+    {
+      title: "Read or change PCB design rules",
+      description:
+        "Reads and changes design rules of the active EasyEDA Pro PCB (beta APIs; the PCB tab must be active). Operation kinds: " +
+        "get_config, get_config_name, get_config_by_name {name}, list_configs {includeSystem?}, overwrite_config {config}, save_config {config, name, allowOverwrite?}, " +
+        "delete_config {name}, set_default_config {name}, get_default_config_name, get_net_rules, overwrite_net_rules {netRules}, get_net_by_net_rules, " +
+        "overwrite_net_by_net_rules {rules}, get_region_rules, overwrite_region_rules {regionRules}, get_net_classes, create_net_class {name, nets, color?}, " +
+        "delete_net_class {name}, rename_net_class {name, newName}, add_nets_to_class {name, nets}, remove_nets_from_class {name, nets}, get_diff_pairs, " +
+        "create_diff_pair {name, positiveNet, negativeNet}, delete_diff_pair {name}, get_equal_length_groups, create_equal_length_group {name, nets, color?}, " +
+        "delete_equal_length_group {name}, add_nets_to_equal_length_group {name, nets}, check_drc {strict?, verbose?}, realtime_drc {action: status|start|stop}, " +
+        "get_nets, get_net_info, get_layers, get_copper_layer_count, set_copper_layer_count {count}, modify_layer {layer, property}, get_stackup, get_stackup_name, " +
+        "list_stackups, get_stackup_by_name {name}, overwrite_stackup {config}. Requires an explicit confirmation phrase.",
+      inputSchema: {
+        operations: z.array(z.record(z.string(), z.unknown())).min(1).max(100),
+        confirmation: z.string().describe("Must include an explicit confirmation phrase such as 'I confirm'."),
+        stopOnError: z.boolean().default(true),
+        timeoutMs: DefaultTimeoutSchema.default(60_000)
+      },
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: true,
+        idempotentHint: false,
+        openWorldHint: false
+      }
+    },
+    async ({ operations, confirmation, stopOnError, timeoutMs }) => {
+      try {
+        if (!hasExplicitMutationConfirmation(confirmation)) {
+          return fail(new Error('PCB rule edit was blocked. The confirmation text must explicitly include a confirmation phrase such as "I confirm".'));
+        }
+        const result = await bridge.call("pcbRules", { operations, stopOnError }, timeoutMs);
+        return ok("Applied PCB rule operations.", { result });
+      } catch (error) {
+        return fail(error);
+      }
+    }
+  );
+
+  server.registerTool(
+    "easyeda_pcb_edit",
+    {
+      title: "Edit PCB primitives",
+      description:
+        "Edits primitives of the active EasyEDA Pro PCB (beta APIs; the PCB tab must be active). Units are mil unless an operation sets mm: true. Operation kinds: " +
+        "call {api, method, args} (any eda.<api>.<method>(...args); an arg may be {\"$call\": {api, method, args}} to pass an API result such as a polygon), " +
+        "list_components, component_pads {designator} (pads with id, number, net, x, y, pad shape, hole), " +
+        "modify_pads {primitiveIds, property, mm?} (property fields of pcb_PrimitivePad.modify, e.g. pad: [shapeType, width, height]), " +
+        "create_region {rect: [x0, y0, x1, y1] | polygon, layer? (default 12 = multi-layer), ruleType? (default [9] = constraint region; 2 no components, 5 no wires, 6 no fills, 7 no pours), name?, lineWidth?, mm?}, " +
+        "list_regions, primitives_in_rect {rect, enclosedOnly?, mm?}, delete {primitiveIds, api?}. Requires an explicit confirmation phrase.",
+      inputSchema: {
+        operations: z.array(z.record(z.string(), z.unknown())).min(1).max(200),
+        confirmation: z.string().describe("Must include an explicit confirmation phrase such as 'I confirm'."),
+        stopOnError: z.boolean().default(true),
+        timeoutMs: DefaultTimeoutSchema.default(60_000)
+      },
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: true,
+        idempotentHint: false,
+        openWorldHint: false
+      }
+    },
+    async ({ operations, confirmation, stopOnError, timeoutMs }) => {
+      try {
+        if (!hasExplicitMutationConfirmation(confirmation)) {
+          return fail(new Error('PCB edit was blocked. The confirmation text must explicitly include a confirmation phrase such as "I confirm".'));
+        }
+        const result = await bridge.call("pcbEdit", { operations, stopOnError }, timeoutMs);
+        return ok("Applied PCB edit operations.", { result });
+      } catch (error) {
+        return fail(error);
+      }
+    }
+  );
+
   server.registerTool(
     "easyeda_confirmed_action",
     {
