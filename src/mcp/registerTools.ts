@@ -3,6 +3,9 @@ import type { EasyEdaBridge } from "../bridge/EasyEdaBridge.js";
 import { ok, fail } from "./toolResult.js";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { PROTOCOL_VERSION, type EditorStatus } from "../protocol/messages.js";
+import { MCP_SERVER_NAME, MCP_SERVER_VERSION } from "../version.js";
+import { DrcScopeSchema, DrcOperationSchema, DrcEditQuerySchema, drcConfirmation } from "../drc/contracts.js";
+import { BridgeTimeoutError, BridgeUnavailableError } from "../bridge/errors.js";
 
 const DefaultTimeoutSchema = z.number().int().positive().max(120_000).default(10_000);
 const EndpointRefSchema = z.union([
@@ -135,8 +138,8 @@ export function registerEasyEdaTools(server: McpServer, bridge: EasyEdaBridge): 
       return ok(summary, {
         doctor: {
           server: {
-            name: "easyeda-pro-mcp",
-            version: "0.1.0",
+            name: MCP_SERVER_NAME,
+            version: MCP_SERVER_VERSION,
             protocolVersion: PROTOCOL_VERSION
           },
           bridge: {
@@ -413,6 +416,126 @@ export function registerEasyEdaTools(server: McpServer, bridge: EasyEdaBridge): 
   });
 
   registerReadTool(server, bridge, {
+    name: "easyeda_export_cpl",
+    title: "Export PCB Component Pick and Place (CPL)",
+    description: "Exports the Pick and Place / Centroid (CPL) file from the active EasyEDA Pro PCB for SMT assembly (e.g. JLCPCB).",
+    method: "exportCpl",
+    inputSchema: {
+      fileName: z.string().min(1).optional().describe("Optional output file name without extension."),
+      format: z.enum(["csv", "xlsx", "txt"]).default("csv").describe("File format for the pick and place report."),
+      unit: z.enum(["mm", "mil"]).default("mm").describe("Coordinate unit for component positions."),
+      timeoutMs: DefaultTimeoutSchema.default(30_000)
+    },
+    summary: "Requested EasyEDA Pro CPL / Pick and Place export."
+  });
+
+  registerReadTool(server, bridge, {
+    name: "easyeda_run_drc",
+    title: "Run PCB Design Rule Check (DRC)",
+    description: "Executes the native EasyEDA Pro PCB Design Rule Check (DRC) on the active board and reports rule violations, clearings, and errors.",
+    method: "runDrc",
+    inputSchema: {
+      strict: z.boolean().default(true).describe("Enforce strict design rule checking."),
+      timeoutMs: DefaultTimeoutSchema.default(60_000)
+    },
+    summary: "Executed EasyEDA Pro PCB DRC check."
+  });
+
+  registerReadTool(server, bridge, {
+    name: "easyeda_get_pcb_layers",
+    title: "Get PCB Layer Stackup",
+    description: "Returns the layer stackup and configuration of the active EasyEDA Pro PCB, including signal/copper layers, mechanical layers, colors, and visibility.",
+    method: "getPcbLayers",
+    inputSchema: {
+      timeoutMs: DefaultTimeoutSchema
+    },
+    summary: "Fetched EasyEDA Pro PCB layer configuration."
+  });
+
+  registerReadTool(server, bridge, {
+    name: "easyeda_get_routing_status",
+    title: "Get PCB Routing Status",
+    description: "Analyzes the PCB routing status, total nets, completion percentage, unrouted net connections (ratsnest), and optional net lengths.",
+    method: "getRoutingStatus",
+    inputSchema: {
+      includeNetLengths: z.boolean().default(false).describe("Include calculated track length for each net."),
+      timeoutMs: DefaultTimeoutSchema.default(30_000)
+    },
+    summary: "Fetched EasyEDA Pro PCB routing status."
+  });
+
+  registerReadTool(server, bridge, {
+    name: "easyeda_list_pcb_components",
+    title: "List PCB components",
+    description: "Lists normalized PCB components with designator, footprint, placement layer, coordinates, and rotation angle.",
+    method: "listPcbComponents",
+    inputSchema: {
+      query: z.string().min(1).optional().describe("Optional text filter against component designator, footprint, or value."),
+      layer: z.enum(["all", "top", "bottom"]).default("all").describe("Filter components by placement layer."),
+      limit: z.number().int().positive().max(500).default(100),
+      includeRaw: z.boolean().default(false),
+      timeoutMs: DefaultTimeoutSchema.default(30_000)
+    },
+    summary: "Listed EasyEDA Pro PCB components."
+  });
+
+  registerReadTool(server, bridge, {
+    name: "easyeda_highlight_net",
+    title: "Highlight or clear PCB net",
+    description: "Visually highlights a specified net on the EasyEDA Pro PCB canvas, or clears all highlighted nets.",
+    method: "highlightNet",
+    inputSchema: {
+      net: z.string().min(1).optional().describe("Net name to highlight (e.g., 'GND', 'VCC_5V')."),
+      clear: z.boolean().default(false).describe("When true, unhighlights all nets."),
+      timeoutMs: DefaultTimeoutSchema
+    },
+    summary: "Updated EasyEDA Pro PCB net highlighting."
+  });
+
+  registerReadTool(server, bridge, {
+    name: "easyeda_get_selection",
+    title: "Get current canvas selection",
+    description: "Returns components, pins, or primitives currently selected by the user on the active schematic or PCB canvas.",
+    method: "getSelection",
+    inputSchema: {
+      timeoutMs: DefaultTimeoutSchema
+    },
+    summary: "Fetched current EasyEDA Pro editor selection."
+  });
+
+  registerReadTool(server, bridge, {
+    name: "easyeda_search_library",
+    title: "Search component library",
+    description: "Searches the EasyEDA / LCSC component catalog by keyword, LCSC part number (e.g. C1523), or manufacturer part number.",
+    method: "searchLibrary",
+    inputSchema: {
+      query: z.string().min(1).describe("Keyword, part number, or LCSC part code (e.g., 'C1523', 'ESP32', '0402 10k')."),
+      limit: z.number().int().positive().max(100).default(20),
+      timeoutMs: DefaultTimeoutSchema.default(30_000)
+    },
+    summary: "Searched EasyEDA Pro component library."
+  });
+
+  registerReadTool(server, bridge, {
+    name: "easyeda_get_drc_rules", title: "Read native PCB design rules",
+    description: "Reads the active PCB's current configuration, named profiles, or net/net-by-net/region rule tables. Returns raw editor JSON and method availability; fields retain editor units. Does not run DRC or write rules.",
+    method: "getDrcRules", inputSchema: { scope: DrcScopeSchema.default("current"), timeoutMs: DefaultTimeoutSchema },
+    summary: "Read native PCB design rules."
+  });
+  registerReadTool(server, bridge, {
+    name: "easyeda_prepare_drc_edit", title: "Prepare a PCB design rule edit",
+    description: "Prepares one typed DRC operation without writing. Creates a new named rule profile, replaces the current configuration, or replaces an entire net/net-by-net/region table. Show all before/after data and obtain human approval for its editId. No implicit PCB save. Profiles persist when explicitly created.",
+    method: "prepareDrcEdit", inputSchema: { operation: DrcOperationSchema, timeoutMs: DefaultTimeoutSchema },
+    summary: "Prepared a PCB design rule edit without writing."
+  });
+  registerReadTool(server, bridge, {
+    name: "easyeda_get_drc_edit_result", title: "Query a PCB design rule edit",
+    description: "Query a retained DRC edit after execution or timeout. Never reapply an uncertain edit. Results live only in this extension instance.",
+    method: "getDrcEditResult", inputSchema: { ...DrcEditQuerySchema.shape, timeoutMs: DefaultTimeoutSchema },
+    summary: "Read retained PCB design rule edit result."
+  });
+
+  registerReadTool(server, bridge, {
     name: "easyeda_lib_lookup",
     title: "Look up library devices",
     description: "Finds library devices by LCSC C number (lcsc) or text search (query). The returned device items can be passed to easyeda_sch_edit create_component.",
@@ -545,31 +668,46 @@ export function registerEasyEdaTools(server: McpServer, bridge: EasyEdaBridge): 
     "easyeda_confirmed_action",
     {
       title: "Confirmed EasyEDA Pro action",
-      description: "Runs a mutating EasyEDA Pro action only when the confirmation text explicitly confirms the action.",
+      description: "Runs a mutating EasyEDA Pro action after human approval. For editDrcRules pass params:{editId} and the exact prepared confirmation. Saving the PCB remains separate.",
       inputSchema: {
-        action: z.enum(["save", "importChanges", "autoroute", "autolayout"]),
-        confirmation: z.string().describe("Must include an explicit confirmation phrase such as 'confirma salvar'."),
+        action: z.enum(["save", "importChanges", "autoroute", "autolayout", "editDrcRules"]),
+        confirmation: z.string().describe("DRC: exact CONFIRM editDrcRules <editId> after human review. Legacy actions require an explicit confirmation phrase."),
         params: z.record(z.string(), z.unknown()).optional(),
         timeoutMs: DefaultTimeoutSchema.default(60_000)
       },
       annotations: {
         readOnlyHint: false,
-        destructiveHint: false,
+        destructiveHint: true,
         idempotentHint: false,
         openWorldHint: false
       }
     },
     async ({ action, confirmation, params, timeoutMs }) => {
+      let drcDispatched = false;
       try {
-        if (!hasExplicitMutationConfirmation(confirmation)) {
+        if (action === "editDrcRules") {
+          const edit = DrcEditQuerySchema.parse(params);
+          if (confirmation !== drcConfirmation(edit.editId)) return fail(new Error("DRC edit blocked: use the exact prepared edit confirmation after human approval."));
+        } else if (!hasExplicitMutationConfirmation(confirmation)) {
           return fail(new Error(`Action "${action}" was blocked. The confirmation text must explicitly include a confirmation phrase such as "confirma salvar".`));
         }
+        drcDispatched = action === "editDrcRules";
         const result = await bridge.call("confirmedAction", { action, confirmation, params }, timeoutMs);
-        return ok(`Executed confirmed EasyEDA Pro action: ${action}.`, {
+        const response = ok(`EasyEDA Pro action result: ${action}.`, {
           action,
           result
         });
+        if (action === "editDrcRules" && (result as { status?: string }).status !== "applied") response.isError = true;
+        return response;
       } catch (error) {
+        if (drcDispatched && (error instanceof BridgeTimeoutError || error instanceof BridgeUnavailableError)) {
+          const response = ok("DRC edit outcome is inconclusive; query the edit without repeating it.", {
+            error: "drc_edit_outcome_unknown", status: "unknown", editId: params?.editId, retryable: false,
+            nextSteps: ["Call easyeda_get_drc_edit_result with this editId. Never automatically replay it."]
+          });
+          response.isError = true;
+          return response;
+        }
         return fail(error);
       }
     }
@@ -594,7 +732,7 @@ function doctorNextSteps(status: EditorStatus): string[] {
     ];
   }
 
-  if (!status.documentName && !status.projectName) {
+  if (!status.documentName && !status.projectName && !status.activeDocumentType && !status.documentInfo) {
     return [
       "Open a schematic or PCB document in EasyEDA Pro.",
       "Run easyeda_get_context or easyeda_live_status again after the document finishes loading."

@@ -1,245 +1,292 @@
 # AI Client Setup
 
-Use this page when the project is already built and you want the exact setup for one AI tool.
+All MCP clients launch the same local Node.js server over `stdio` via `@vlabsoftware/easyeda-pro-mcp` — no repository clone or manual build required.
 
-For a first-time flow, start with [Quick Start](./quick-start.md) or [Getting Started](./getting-started.md).
+## Automatic Setup (All Clients)
 
-## Shared Setup
-
-From the repository root:
+Run one command in your terminal (requires **Node.js `>= 20`**):
 
 ```bash
-npm install
-npm run setup:local
+npx -y @vlabsoftware/easyeda-pro-mcp setup
 ```
 
-All clients launch the same local server:
+`setup` safely merges `easyeda-pro` into every detected AI client on your machine (preserving your existing MCP servers) and exports `easyeda_mcp_bridge.eext` to `~/Downloads` (or your current folder).
+
+Useful CLI options:
 
 ```bash
-node /absolute/path/to/easyeda_mcp/dist/index.js
+# Preview changes without modifying any files
+npx -y @vlabsoftware/easyeda-pro-mcp setup --dry-run
+
+# Configure specific clients explicitly
+npx -y @vlabsoftware/easyeda-pro-mcp setup --client cursor,vscode,claude-desktop
+
+# Copy only easyeda_mcp_bridge.eext to the current folder
+npx -y @vlabsoftware/easyeda-pro-mcp export-extension .
 ```
 
-Path examples:
+## Standard MCP Configuration & 1-Click Links
 
-```text
-/Users/you/Documents/easyeda_mcp/dist/index.js
-C:\Users\you\Documents\easyeda_mcp\dist\index.js
+Most MCP clients use this standard JSON configuration:
+
+::: code-group
+
+```json [macOS / Linux]
+{
+  "mcpServers": {
+    "easyeda-pro": {
+      "command": "npx",
+      "args": ["-y", "@vlabsoftware/easyeda-pro-mcp"]
+    }
+  }
+}
 ```
 
-## Choose Your Tool
+```json [Windows]
+{
+  "mcpServers": {
+    "easyeda-pro": {
+      "command": "cmd",
+      "args": ["/c", "npx", "-y", "@vlabsoftware/easyeda-pro-mcp"]
+    }
+  }
+}
+```
 
-| Tool | Best for | Setup style |
+:::
+
+| Client | 1-Click / CLI Shortcut | Configuration Location |
 | --- | --- | --- |
-| [Claude Desktop](#claude-desktop) | desktop chat on Windows or macOS | JSON config file |
-| [Codex CLI](#codex-cli) | terminal workflow with Codex | `codex mcp add` |
-| [Claude Code CLI](#claude-code-cli) | terminal workflow with Claude | `claude mcp add` or `.mcp.json` |
-| [VS Code](#vs-code) | Copilot Chat Agent mode | `.vscode/mcp.json` |
-| [Other MCP Clients and CLIs](#other-mcp-clients-and-clis) | any local `stdio` MCP client | client-specific config |
+| [Cursor](#cursor) | [Install in Cursor](https://cursor.com/install-mcp?name=easyeda-pro&config=eyJjb21tYW5kIjoibnB4IiwiYXJncyI6WyIteSIsIkB2bGFic29mdHdhcmUvZWFzeWVkYS1wcm8tbWNwIl19) | `~/.cursor/mcp.json` or `.cursor/mcp.json` |
+| [VS Code](#vs-code) | [Install in VS Code](https://vscode.dev/redirect?url=vscode%3Amcp%2Finstall%3F%257B%2522name%2522%253A%2522easyeda-pro%2522%252C%2522command%2522%253A%2522npx%2522%252C%2522args%2522%253A%255B%2522-y%2522%252C%2522%2540vlabsoftware%252Feasyeda-pro-mcp%2522%255D%257D) | User `Code/User/mcp.json` or `.vscode/mcp.json` (`servers` schema) |
+| [Claude Desktop](#claude-desktop) | [Download `.mcpb` Bundle](https://github.com/VLab-Software/easyeda_mcp/releases/latest/download/easyeda-pro-mcp.mcpb) | `claude_desktop_config.json` |
+| [Claude Code CLI](#claude-code-cli) | `claude mcp add` | `~/.claude.json` or project `.mcp.json` |
+| [Codex CLI](#codex-cli) | `codex mcp add` | `~/.codex/config.toml` |
+| [Antigravity](#antigravity) | `npx -y @vlabsoftware/easyeda-pro-mcp setup -c antigravity` | `~/.gemini/config/mcp_config.json` |
+| [Windsurf / Cline / Zed](#generic-mcp-clients) | `npx -y @vlabsoftware/easyeda-pro-mcp setup -c windsurf` | Standard `mcpServers` stdio configuration |
 
-## Claude Desktop
+::: info Paired EasyEDA Pro Extension
+If you install via a 1-click link or manual JSON config, remember to also import [`easyeda_mcp_bridge.eext`](https://github.com/VLab-Software/easyeda_mcp/releases/latest/download/easyeda_mcp_bridge.eext) (or run `npx -y @vlabsoftware/easyeda-pro-mcp export-extension .`) in EasyEDA Pro. See [EasyEDA Pro Extension](./easyeda-extension.md).
+:::
 
-Use this on Windows or macOS if you want a desktop chat app.
-
-Windows config file:
-
-```text
-%APPDATA%\Claude\claude_desktop_config.json
-```
-
-macOS config file:
-
-```text
-~/Library/Application Support/Claude/claude_desktop_config.json
-```
-
-If the file does not exist, create it. Then add one of these examples and replace the path.
-
-macOS example:
-
-```json
-{
-  "mcpServers": {
-    "easyeda-pro": {
-      "command": "node",
-      "args": ["/Users/you/Documents/easyeda_mcp/dist/index.js"]
-    }
-  }
-}
-```
-
-Windows example:
-
-```json
-{
-  "mcpServers": {
-    "easyeda-pro": {
-      "command": "node",
-      "args": ["C:\\Users\\you\\Documents\\easyeda_mcp\\dist\\index.js"]
-    }
-  }
-}
-```
-
-Then:
-
-1. fully restart Claude Desktop
-2. open EasyEDA Pro
-3. open a schematic or PCB
-4. use `MCP Bridge -> Reconnect` if needed
-5. ask Claude to run `easyeda_doctor`
-
-Note: Claude Desktop local MCP setup is separate from Claude.ai remote connectors.
-
-## Codex CLI
-
-Use this if you want a terminal workflow in Codex.
-
-```bash
-codex mcp add easyeda-pro -- node /absolute/path/to/easyeda_mcp/dist/index.js
-codex mcp list
-```
-
-Then:
-
-1. open Codex in this repository
-2. open EasyEDA Pro
-3. open the target schematic or PCB
-4. reconnect the extension if needed
-5. ask Codex to run `easyeda_doctor`
+---
 
 ## Claude Code CLI
 
-Use this if you want a terminal workflow in Claude Code.
+Use the Claude Code CLI to register the server:
 
-```bash
-claude mcp add easyeda-pro -- node /absolute/path/to/easyeda_mcp/dist/index.js
+::: code-group
+
+```bash [macOS / Linux]
+claude mcp add --scope user easyeda-pro -- npx -y @vlabsoftware/easyeda-pro-mcp
 claude mcp list
 ```
 
-You can also use a project `.mcp.json`:
+```powershell [Windows]
+claude mcp add --scope user easyeda-pro -- cmd /c npx -y @vlabsoftware/easyeda-pro-mcp
+claude mcp list
+```
+
+:::
+
+Alternatively, commit `.mcp.json` at the root of your project:
 
 ```json
 {
   "mcpServers": {
     "easyeda-pro": {
-      "command": "node",
-      "args": ["/absolute/path/to/easyeda_mcp/dist/index.js"]
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "@vlabsoftware/easyeda-pro-mcp"]
     }
   }
 }
 ```
 
-If Claude Desktop is already configured, Claude Code can import from it:
+## Codex CLI
 
-```bash
-claude mcp add-from-claude-desktop
+Register the server with the OpenAI Codex CLI:
+
+::: code-group
+
+```bash [macOS / Linux]
+codex mcp add easyeda-pro -- npx -y @vlabsoftware/easyeda-pro-mcp
+codex mcp list
 ```
+
+```powershell [Windows]
+codex mcp add easyeda-pro -- cmd /c npx -y @vlabsoftware/easyeda-pro-mcp
+codex mcp list
+```
+
+:::
+
+Or add it directly to `~/.codex/config.toml`:
+
+```toml
+[mcp_servers.easyeda-pro]
+command = "npx"
+args = ["-y", "@vlabsoftware/easyeda-pro-mcp"]
+```
+
+## Claude Desktop
+
+### Option A: 1-Click `.mcpb` Bundle (No JSON Editing)
+
+1. Download [`easyeda-pro-mcp.mcpb`](https://github.com/VLab-Software/easyeda_mcp/releases/latest/download/easyeda-pro-mcp.mcpb) from the latest GitHub Release.
+2. Double-click `easyeda-pro-mcp.mcpb` (or drag it into **Claude Desktop -> Settings -> Extensions**) and confirm installation.
+
+### Option B: `claude_desktop_config.json`
+
+Add `easyeda-pro` to `claude_desktop_config.json`, then **fully quit and reopen** Claude Desktop:
+
+- **macOS**: `~/Library/Application Support/Claude/claude_desktop_config.json`
+- **Windows**: `%APPDATA%\Claude\claude_desktop_config.json`
+- **Linux**: `~/.config/Claude/claude_desktop_config.json`
+
+::: code-group
+
+```json [macOS / Linux]
+{
+  "mcpServers": {
+    "easyeda-pro": {
+      "command": "npx",
+      "args": ["-y", "@vlabsoftware/easyeda-pro-mcp"]
+    }
+  }
+}
+```
+
+```json [Windows]
+{
+  "mcpServers": {
+    "easyeda-pro": {
+      "command": "cmd",
+      "args": ["/c", "npx", "-y", "@vlabsoftware/easyeda-pro-mcp"]
+    }
+  }
+}
+```
+
+:::
+
+## Cursor
+
+Click **[Install in Cursor](https://cursor.com/install-mcp?name=easyeda-pro&config=eyJjb21tYW5kIjoibnB4IiwiYXJncyI6WyIteSIsIkB2bGFic29mdHdhcmUvZWFzeWVkYS1wcm8tbWNwIl19)**, or add to `~/.cursor/mcp.json` (global) or `.cursor/mcp.json` (project), then click **Refresh** in **Cursor Settings -> MCP**:
+
+::: code-group
+
+```json [macOS / Linux]
+{
+  "mcpServers": {
+    "easyeda-pro": {
+      "command": "npx",
+      "args": ["-y", "@vlabsoftware/easyeda-pro-mcp"]
+    }
+  }
+}
+```
+
+```json [Windows]
+{
+  "mcpServers": {
+    "easyeda-pro": {
+      "command": "cmd",
+      "args": ["/c", "npx", "-y", "@vlabsoftware/easyeda-pro-mcp"]
+    }
+  }
+}
+```
+
+:::
 
 ## VS Code
 
-Use this if you want MCP tools in Copilot Chat Agent mode.
+Click **[Install in VS Code](https://vscode.dev/redirect?url=vscode%3Amcp%2Finstall%3F%257B%2522name%2522%253A%2522easyeda-pro%2522%252C%2522command%2522%253A%2522npx%2522%252C%2522args%2522%253A%255B%2522-y%2522%252C%2522%2540vlabsoftware%252Feasyeda-pro-mcp%2522%255D%257D)**, or create `.vscode/mcp.json` in your workspace (or run **MCP: Open User Configuration** from the Command Palette) and open **GitHub Copilot Chat** in **Agent** mode:
 
-Create `.vscode/mcp.json`:
+::: code-group
 
-```json
+```json [macOS / Linux]
 {
   "servers": {
     "easyeda-pro": {
       "type": "stdio",
-      "command": "node",
-      "args": ["${workspaceFolder}/dist/index.js"]
+      "command": "npx",
+      "args": ["-y", "@vlabsoftware/easyeda-pro-mcp"]
     }
   }
 }
 ```
 
-If the VS Code workspace is not the repository root, use an absolute path instead.
-
-Then:
-
-1. open VS Code in the repository
-2. open Copilot Chat in Agent mode
-3. trust the MCP server when prompted
-4. confirm the server is enabled in the tools picker
-5. ask for `easyeda_doctor`
-
-Useful VS Code commands:
-
-- `MCP: Open Workspace Folder Configuration`
-- `MCP: List Servers`
-- `MCP: Reset Trust`
-
-## Other MCP Clients and CLIs
-
-If your client supports a local `stdio` MCP server, use:
-
-```bash
-node /absolute/path/to/easyeda_mcp/dist/index.js
+```json [Windows]
+{
+  "servers": {
+    "easyeda-pro": {
+      "type": "stdio",
+      "command": "cmd",
+      "args": ["/c", "npx", "-y", "@vlabsoftware/easyeda-pro-mcp"]
+    }
+  }
+}
 ```
 
-If the client wants JSON, many MCP clients use this shape:
+:::
 
-```json
+## Antigravity
+
+Run `npx -y @vlabsoftware/easyeda-pro-mcp setup --client antigravity`, or add `easyeda-pro` to `~/.gemini/config/mcp_config.json`, then click **Refresh** in **Additional Options (`...`) -> MCP Servers**:
+
+::: code-group
+
+```json [macOS / Linux]
 {
   "mcpServers": {
     "easyeda-pro": {
-      "command": "node",
-      "args": ["/absolute/path/to/easyeda_mcp/dist/index.js"]
+      "command": "npx",
+      "args": ["-y", "@vlabsoftware/easyeda-pro-mcp"]
     }
   }
 }
 ```
 
-If the client needs a custom config format, see [MCP Client Setup](./mcp-client-setup.md).
+```json [Windows]
+{
+  "mcpServers": {
+    "easyeda-pro": {
+      "command": "cmd",
+      "args": ["/c", "npx", "-y", "@vlabsoftware/easyeda-pro-mcp"]
+    }
+  }
+}
+```
 
-## After Connecting Any Client
+:::
 
-Use the same runtime order for every AI tool:
+## Generic MCP Clients
 
-1. start the AI tool and let it launch the MCP server
-2. open EasyEDA Pro
-3. open the target schematic or PCB
-4. load or reconnect the EasyEDA Pro extension
-5. run `easyeda_doctor`
+Any client that supports local `stdio` MCP servers (**Windsurf**, **Cline**, **Zed**, **Gemini CLI**, **JetBrains AI Assistant**, etc.) can launch `npx -y @vlabsoftware/easyeda-pro-mcp` (or `cmd /c npx -y @vlabsoftware/easyeda-pro-mcp` on Windows).
 
-## First Useful Prompts
+- **Windsurf**: `~/.codeium/windsurf/mcp_config.json` (supported natively by `npx -y @vlabsoftware/easyeda-pro-mcp setup --client windsurf`).
+- **Local repository build (contributors)**: Run `npm install && npm run setup:local && npm run setup:clients` from a cloned checkout to configure clients with `node /absolute/path/to/easyeda_mcp/dist/index.js`.
 
-Check health:
+### Environment Variables
+
+The WebSocket bridge binds to `127.0.0.1:8765` by default. Change these variables only if you also update `extension/src/bridgeConfig.ts` and rebuild the `.eext` package:
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `EASYEDA_MCP_WS_HOST` | `127.0.0.1` | Local WebSocket bind address for the extension bridge |
+| `EASYEDA_MCP_WS_PORT` | `8765` | Local WebSocket port for the extension bridge |
+
+---
+
+## Verify Connection
+
+With your AI client running and the [EasyEDA Pro Extension](./easyeda-extension.md) connected to an open schematic or PCB:
 
 ```text
 Run easyeda_doctor and summarize the bridge status.
+Run easyeda_get_context and tell me which document is open.
 ```
 
-Confirm the open document:
-
-```text
-Run easyeda_get_context and tell me which EasyEDA Pro document is open.
-```
-
-Inspect a schematic:
-
-```text
-Run easyeda_schematic_snapshot and summarize the visible components, nets, and warnings.
-```
-
-Trace a part:
-
-```text
-Run easyeda_trace_component for USB1 and summarize its connected nets.
-```
-
-## Common Problems
-
-- tools do not appear: rebuild and restart the MCP client
-- tools appear but calls fail: run `easyeda_doctor`
-- extension is disconnected: open EasyEDA Pro and use `MCP Bridge -> Reconnect`
-- `dist/index.js` is missing: run `npm run setup:local`
-- Windows paths fail in JSON: escape backslashes, for example `C:\\Users\\you\\Documents\\easyeda_mcp\\dist\\index.js`
-
-## Official References
-
-- Anthropic Claude Code MCP docs: <https://code.claude.com/docs/en/mcp>
-- Anthropic Claude Desktop local MCP help: <https://support.anthropic.com/en/articles/10949351-getting-started-with-local-mcp-servers-on-claude-desktop>
-- OpenAI Docs MCP page with Codex MCP examples: <https://developers.openai.com/learn/docs-mcp>
-- VS Code MCP setup docs: <https://code.visualstudio.com/docs/copilot/customization/mcp-servers>
-- VS Code MCP configuration reference: <https://code.visualstudio.com/docs/copilot/reference/mcp-configuration>
+If tools do not appear or `connected` is `false`, see [Troubleshooting](./troubleshooting.md).

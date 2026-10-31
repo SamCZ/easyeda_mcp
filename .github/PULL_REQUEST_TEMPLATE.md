@@ -1,63 +1,25 @@
-# PR Title
+## Summary
 
-Use one of the patterns below:
+<!-- Briefly describe what changed and why. -->
 
-- `feature: title`
-- `fix: title`
-- `docs: title`
-- `chore: title`
+Closes #
 
-Examples:
+## Changes
 
-- `feature: add easyeda schematic validation`
-- `fix: prevent websocket reconnection loop`
-- `docs: improve quick start and setup links`
-- `chore: simplify packaging workflow`
+- 
 
-## PR Scope
+## PR & SemVer Checklist
 
-Keep this pull request small and easy to review.
+- [ ] **Target branch**: `develop` for day-to-day PRs (`feature/*`, `fix/*`, `docs/*`, `chore/*`), or `master` when promoting a release (`develop -> master`)
+- [ ] **PR title prefix** matches the SemVer bump when promoted to `master`:
+  - `feature: <summary>` *(bumps **minor** / middle number: `1.2.0` -> `1.3.0`)*
+  - `fix: <summary>` / `docs: <summary>` / `chore: <summary>` *(bumps **patch** / last number: `1.2.0` -> `1.2.1`)*
+  - `feature!: <summary>` *(bumps **major** / first number: `1.2.0` -> `2.0.0` — breaking change)*
 
-Good examples:
+## Validation
 
-- one focused feature
-- one bug fix
-- one docs improvement set
-- one release-preparation change
+- [ ] `npm test`
+- [ ] `npm run typecheck && npm run typecheck:extension`
+- [ ] `npm run setup:local` (if server or extension changed)
+- [ ] `npm run docs:build` (if docs changed)
 
-Avoid mixing unrelated code, docs, refactors, and release work in the same PR unless they are part of the same user-facing change.
-
-## What changed
-
-Describe objectively what this PR delivers.
-
-## Context
-
-Briefly explain the problem, need, or motivation for this change.
-
-## How to test
-
-List the steps to validate this change.
-
-## Release impact
-
-Choose one and explain briefly:
-
-- No release needed
-- Include in next planned release
-- Needs patch release
-- Needs minor release
-
-## Tracking
-
-- Related issue:
-- Milestone:
-
-## Checklist
-
-- [ ] The title follows one of the documented patterns
-- [ ] The PR is small and focused
-- [ ] I tested locally
-- [ ] I updated documentation if needed
-- [ ] I did not include out-of-scope changes
-- [ ] I assigned or confirmed the right milestone when relevant
